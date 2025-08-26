@@ -118,12 +118,18 @@ st.markdown(
 
 ### ----------------------------------------------------------------------------- ###
 ### CONFIGURATION ###
-
 client = OpenAI(api_key=st.secrets["openai_api_key"])
 EXCLUDE_SEGMENTS = ["index", "home", "homepage", "privacy", "terms", "legal", "sitemap",
         "sitemap.xml", "robots.txt", "author", "authors", "admin", "login",
         "user-data", "settings", "internal-docs", "pricing", "sales-materials", "confidential", "beta", "staging", "dev", "404",
         "search", "thank-you", "cart", "tag", "category", "archive"]
+
+st.write({
+    "openai": openai.__version__,
+    "has_responses": hasattr(client, "responses"),
+})
+
+
 
 ### THE ACTUAL APP ###
 st.image("bossdata.svg", width=200)
