@@ -129,7 +129,7 @@ st.title("Llms.txt Generator")
 st.write(
     "input your website main domain. Like https://bossdata.be"
 )
-base_url = st.text_input("Website domain:", placeholder = "https://bossdata.be/")
+base_url = st.text_input("Website domain:", placeholder = "https://bossdata.be")
 size = st.text_input("Amount of urls (leave blank for max - 100):", placeholder = 100)
 
 
@@ -142,7 +142,7 @@ if st.button("Generate"):
     st.write("Phase 1: fetching " + str(size) + " urls (according to size)")
 
     # Fase 1: bestand uitlezen en omzetten in lijst
-    sitemap_url = base_url + "page-sitemap.xml"
+    sitemap_url = base_url + "/page-sitemap.xml"
     urls = generator.extract_urls_from_sitemap(sitemap_url) # urls is defined here
     selected_urls = urls[:int(size)] # selected_urls is defined here
 
