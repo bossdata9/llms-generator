@@ -6,6 +6,8 @@ import os
 from openai import OpenAI
 import json
 import random
+import openai   # <-- this is the missing piece
+
 
 st.markdown(
     """
@@ -116,7 +118,11 @@ st.markdown(
 
 ### ----------------------------------------------------------------------------- ###
 ### CONFIGURATION ###
-os.environ["OPENAI_API_KEY"] = st.secrets["openai_api_key"]
+st.write({
+    "openai": openai.__version__,
+    "has_responses": hasattr(OpenAI(), "responses"),
+})
+
 client = OpenAI()
 EXCLUDE_SEGMENTS = ["index", "home", "homepage", "privacy", "terms", "legal", "sitemap",
         "sitemap.xml", "robots.txt", "author", "authors", "admin", "login",
