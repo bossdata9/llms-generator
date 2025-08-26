@@ -3,3 +3,5 @@ trafilatura
 openai
 json
 requests
+time
+random
