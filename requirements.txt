@@ -1,6 +1,6 @@
 streamlit==1.36.0
 pillow==10.4.0
-openai==1.40.6
+openai==1.101.0
 httpx==0.27.2
 pydantic==2.8.2
 pydantic_core==2.20.1
