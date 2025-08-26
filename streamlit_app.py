@@ -124,13 +124,6 @@ EXCLUDE_SEGMENTS = ["index", "home", "homepage", "privacy", "terms", "legal", "s
         "user-data", "settings", "internal-docs", "pricing", "sales-materials", "confidential", "beta", "staging", "dev", "404",
         "search", "thank-you", "cart", "tag", "category", "archive"]
 
-st.write({
-    "openai": openai.__version__,
-    "has_responses": hasattr(client, "responses"),
-})
-
-
-
 ### THE ACTUAL APP ###
 st.image("bossdata.svg", width=200)
 st.title("Llms.txt Generator")
