@@ -1,7 +1,5 @@
 streamlit
-trafilatura
+pillow
 openai
-json
 requests
-time
-random
+trafilatura
