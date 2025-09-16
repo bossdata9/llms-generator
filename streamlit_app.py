@@ -145,6 +145,7 @@ if st.button("Generate"):
     # Fase 1: bestand uitlezen en omzetten in lijst
     sitemap_url = base_url + "/page-sitemap.xml"
     urls = generator.extract_urls_from_sitemap(sitemap_url) # urls is defined here
+    st.write(urls)
     selected_urls = urls[:int(size)] # selected_urls is defined here
 
     # Fase 2: Enkel relevante URLS selecteren
