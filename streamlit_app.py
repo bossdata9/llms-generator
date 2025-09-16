@@ -130,11 +130,19 @@ st.title("Llms.txt Generator")
 st.write(
     "input your page sitemap xml. Like https://bossdata.be/page-sitemap.xml"
 )
-sitemap_location = st.text_input("Website domain:", placeholder = "https://bossdata.be/page-sitemap.xml")
+
+uploaded_file = st.file_uploader("Upload sitemap XML file", type=["xml"])
+
+if uploaded_file is not None:
+    sitemap_location = uploaded_file  # pass this to your generator function
+else:
+    sitemap_location = None
+
+
 size = st.text_input("Amount of urls (leave blank for max - 100):", placeholder = 100)
 
 
-if st.button("Generate"):
+if st.button("Generate") and sitemap_location is not None:
     size = 100 if size.strip() == "" else min(int(size), 100)
 
     output_container = st.empty()
@@ -184,8 +192,8 @@ if st.button("Generate"):
     # # Fase 4: clusteren en opmaken LLMS.TXT
     st.write("Phase 4: Clustering & creating final file")
     USE_EMBEDDINGS = True
-    EMBED_MODEL = "text-embedding-3-small"
-    SIM_THRESHOLD = 0.82
+    EMBED_MODEL = "text-embedding-3-large"
+    SIM_THRESHOLD = 0.92
     llms_output = generator.build_llms_txt_from_results(results, client, USE_EMBEDDINGS, EMBED_MODEL, SIM_THRESHOLD)
     
     st.write("Final llms.txt is Ready. Download here:")

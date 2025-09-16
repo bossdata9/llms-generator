@@ -23,31 +23,81 @@ import re
 from urllib.parse import urlparse
 from collections import defaultdict, Counter
 import math
+from datetime import datetime
+
+# ----------------------------------------------------------------------
+# Tiny logger helper (prints to console with timestamps)
+# ----------------------------------------------------------------------
+def log(msg: str):
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}", flush=True)
 
 # ======================================================================
 # All functions are now defined here
 # ======================================================================
-def extract_urls_from_sitemap(sitemap_url):
+
+def _local_name(tag: str) -> str:
+    """Return the local name without namespace, e.g. '{ns}url' -> 'url'."""
+    return tag.split('}', 1)[-1] if '}' in tag else tag
+
+def extract_urls_from_sitemap(xml_file):
     """
-    Gets URLs from an XML sitemap. If the sitemap contains links to
-    other sitemaps, it will also check those.
+    Parse a sitemap XML and return all <loc> values that are direct
+    children of <url> (namespace-agnostic).
+
+    Args:
+        xml_file: A file-like object (e.g., from st.file_uploader) or a string path.
+
+    Returns:
+        List[str]: URLs found in <url><loc>...</loc></url>
     """
-    response = requests.get(sitemap_url)
-    if response.status_code != 200:
-        print(f"Failed to fetch the sitemap: {sitemap_url}. Status code: {response.status_code}")
-        return []
-    root = ET.fromstring(response.content)
-    namespace = {'ns': 'http://www.sitemaps.org/schemas/sitemap/0.9'}
-    urls = []
-    sitemap_tags = root.findall('.//ns:sitemap/ns:loc', namespace)
-    if sitemap_tags:
-        for sitemap in sitemap_tags:
-            urls.extend(extract_urls_from_sitemap(sitemap.text))
+    log("extract_urls_from_sitemap: start")
+    # Read bytes from file-like or path
+    if hasattr(xml_file, "read"):
+        log("extract_urls_from_sitemap: detected file-like object")
+        xml_bytes = xml_file.read()
     else:
-        urls = [loc.text for loc in root.findall('.//ns:loc', namespace)]
-    return urls
+        log(f"extract_urls_from_sitemap: reading from path: {xml_file}")
+        with open(xml_file, "rb") as f:
+            xml_bytes = f.read()
+
+    size_kb = round(len(xml_bytes) / 1024, 2)
+    log(f"extract_urls_from_sitemap: loaded XML ({size_kb} KB)")
+
+    # Parse XML
+    try:
+        root = ET.fromstring(xml_bytes)
+        log("extract_urls_from_sitemap: XML parsed successfully")
+    except ET.ParseError as e:
+        log(f"extract_urls_from_sitemap: XML parse error -> {e}")
+        raise ValueError(f"Failed to parse XML: {e}") from e
+
+    urls = []
+    url_nodes = 0
+    # Iterate over all elements; select only <url> nodes by local-name
+    for url_el in root.iter():
+        if _local_name(url_el.tag) != "url":
+            continue
+        url_nodes += 1
+        # Get direct child <loc> only
+        for child in list(url_el):
+            if _local_name(child.tag) == "loc" and child.text:
+                loc = child.text.strip()
+                if loc:
+                    urls.append(loc)
+
+    # Optional: de-duplicate while preserving order
+    seen = set()
+    deduped = []
+    for u in urls:
+        if u not in seen:
+            seen.add(u)
+            deduped.append(u)
+
+    log(f"extract_urls_from_sitemap: found {len(urls)} <loc> values across {url_nodes} <url> nodes; {len(deduped)} unique URLs")
+    return deduped
 
 def is_relevant_page(url: str, client, EXCLUDE_SEGMENTS, model="gpt-4.1-mini"):
+    log(f"is_relevant_page: checking relevance for {url} with model={model}")
     exclude_str = ", ".join(EXCLUDE_SEGMENTS)
     prompt = f"""
 You are given a URL.
@@ -66,69 +116,80 @@ Return DROP otherwise. When in doubt, just use KEEP.
 
 URL: {url}
 """
-    resp = client.responses.create(
-        model=model,
-        input=[{"role": "user", "content": prompt}],
-        temperature=0,
-    )
-    txt = resp.output_text.strip().upper()
-    return txt == "KEEP"
+    try:
+        resp = client.responses.create(
+            model=model,
+            input=[{"role": "user", "content": prompt}],
+            temperature=0,
+        )
+        txt = resp.output_text.strip().upper()
+        keep = txt == "KEEP"
+        log(f"is_relevant_page: model returned '{txt}' -> {'KEEP' if keep else 'DROP'}")
+        return keep
+    except Exception as e:
+        log(f"is_relevant_page: ERROR {e} -> defaulting to KEEP")
+        return True  # fail-open to KEEP so pipeline doesn't halt
 
 SESSION = requests.Session()
 SESSION.headers.update({"User-Agent": "Mozilla/5.0"})
 
 def fetch_text(url: str) -> str:
+    log(f"fetch_text: fetching {url}")
     try:
         r = SESSION.get(url, timeout=20)
         r.raise_for_status()
         text = trafilatura.extract(r.text)
+        length = len(text) if text else 0
+        log(f"fetch_text: success, extracted {length} chars")
         return text or ""
-    except Exception:
+    except Exception as e:
+        log(f"fetch_text: ERROR for {url} -> {e}")
         return ""
 
 def describe_page(url: str, page_text: str, client, meta_title="", h1="", model="gpt-4.1-mini"):
+    log(f"describe_page: summarizing {url} (ignoring page_text) with model={model}")
+    
     base_prompt = f"""You will summarize the page for: {url}
 
 Rules:
-- Focus on the page’s **primary content** (topic, offering, purpose).
-- **Ignore** cookie banners, consent notices, privacy/terms/legal boilerplate, navigation, footers, and popups.
-- Prefer signals from the HTML <title>, H1/H2 headings, and body copy that describe the main topic.
+- Focus only on the page’s **primary content** (topic, offering, purpose).
+- Ignore cookie banners, privacy/legal boilerplate, navigation, and footers.
+- Prefer signals from the HTML <title> and H1 if available.
 
 Constraints:
 - Title: exactly 3–4 words, English.
 - Description: exactly 9–10 words, plain, neutral English.
 Return JSON with keys: title, description.
 
-Page signals (if present):
+Signals available:
 - HTML title: {meta_title}
 - H1: {h1}
-
---- PAGE CONTENT START ---
-{page_text[:8000]}
---- PAGE CONTENT END ---
 """
-    resp = client.responses.create(
-        model=model,
-        input=[{"role": "user", "content": base_prompt}],
-        temperature=0.3,
-    )
-    txt = resp.output_text.strip()
-    if txt.startswith("```"):
-        txt = re.sub(r"^```[a-zA-Z]*\n?", "", txt)
-        txt = re.sub(r"\n?```$", "", txt)
-        txt = txt.strip()
     try:
+        resp = client.responses.create(
+            model=model,
+            input=[{"role": "user", "content": base_prompt}],
+            temperature=0.3,
+        )
+        txt = resp.output_text.strip()
+        if txt.startswith("```"):
+            txt = re.sub(r"^```[a-zA-Z]*\n?", "", txt)
+            txt = re.sub(r"\n?```$", "", txt)
+            txt = txt.strip()
         data = json.loads(txt)
-        return {
-            "url": url,
-            "title": data.get("title", "").strip(),
-            "description": data.get("description", "").strip()
-        }
-    except Exception:
-        return {"url": url, "title": "", "description": txt}
+        title = data.get("title", "").strip()
+        desc  = data.get("description", "").strip()
+        log(f"describe_page: ok -> title='{title}' | desc='{desc}'")
+        return {"url": url, "title": title, "description": desc}
+    except Exception as e:
+        log(f"describe_page: ERROR parsing model output -> {e}")
+        return {"url": url, "title": "", "description": ""}
 
 def generate_site_description(results, client, model="gpt-4.1-mini"):
-    if not results: return "General Website", "No description available."
+    log(f"generate_site_description: start with {len(results)} results, model={model}")
+    if not results: 
+        log("generate_site_description: empty results -> fallback description")
+        return "General Website", "No description available."
     first_url = results[0]["url"]
     domain = urlparse(first_url).netloc.lower()
     sample_text = "\n".join(
@@ -153,8 +214,11 @@ Pages:
             temperature=0,
         )
         site_description = resp.output_text.strip()
+        log(f"generate_site_description: ok for domain={domain}")
         return domain, site_description
-    except Exception: return domain, "No description available."
+    except Exception as e:
+        log(f"generate_site_description: ERROR -> {e}")
+        return domain, "No description available."
 
 def url_first_segment(u: str) -> str:
     p = urlparse(u)
@@ -169,8 +233,11 @@ def norm(a): return math.sqrt(dot(a, a)) or 1e-12
 def cosine(a, b): return dot(a, b) / (norm(a) * norm(b))
 
 def cluster_label_from_items(items, client, fallback="Content", model="gpt-4.1-mini"):
+    log(f"cluster_label_from_items: labeling {len(items)} items with model={model}")
     titles = [it.get("title", "").strip() for it in items if it.get("title")]
-    if not titles: return fallback
+    if not titles: 
+        log("cluster_label_from_items: no titles -> fallback")
+        return fallback
     titles_text = "\n".join(f"- {t}" for t in titles if t)
     prompt = f"""
 Given the following page titles, suggest a concise English cluster label (2–4 words)
@@ -188,18 +255,27 @@ Titles:
             temperature=0,
         )
         label = resp.output_text.strip()
-        return label if label else fallback
-    except Exception: return fallback
+        label = label if label else fallback
+        log(f"cluster_label_from_items: label='{label}'")
+        return label
+    except Exception as e:
+        log(f"cluster_label_from_items: ERROR -> {e} (fallback='{fallback}')")
+        return fallback
 
 def seed_clusters(results):
+    log(f"seed_clusters: bucketing {len(results)} items by first path segment")
     buckets = defaultdict(list)
     for item in results:
         seg = url_first_segment(item.get("url","")) or "root"
         buckets[seg].append(item)
+    sizes = {k: len(v) for k, v in buckets.items()}
+    log(f"seed_clusters: {len(buckets)} buckets -> sizes {sizes}")
     return [items for _, items in sorted(buckets.items(), key=lambda kv: kv[0])]
 
 def embed_texts(texts, client, EMBED_MODEL):
+    log(f"embed_texts: embedding {len(texts)} texts with model={EMBED_MODEL}")
     resp = client.embeddings.create(model=EMBED_MODEL, input=texts)
+    log("embed_texts: embeddings created")
     return [d.embedding for d in resp.data]
 
 def represent_item(item):
@@ -214,19 +290,26 @@ def cluster_centroid(vecs):
     return [x/len(vecs) for x in s]
 
 def semantically_merge(clusters, client, USE_EMBEDDINGS, EMBED_MODEL, SIM_THRESHOLD):
+    log(f"semantically_merge: start with {len(clusters)} clusters | threshold={SIM_THRESHOLD} | model={EMBED_MODEL}")
     texts = []
     idx_map = []
     for ci, items in enumerate(clusters):
         for ii, it in enumerate(items):
             texts.append(represent_item(it))
             idx_map.append((ci, ii))
-    if not texts: return clusters
+    if not texts:
+        log("semantically_merge: no texts -> return original clusters")
+        return clusters
+
     vecs = embed_texts(texts, client, EMBED_MODEL)
     per_cluster_vecs = defaultdict(list)
-    for (ci, _), v in zip(idx_map, vecs): per_cluster_vecs[ci].append(v)
+    for (ci, _), v in zip(idx_map, vecs):
+        per_cluster_vecs[ci].append(v)
     centroids = [cluster_centroid(per_cluster_vecs[i]) for i in range(len(clusters))]
+
     merged = []
     used = set()
+    merge_ops = []
     for i in range(len(clusters)):
         if i in used: continue
         base_items = list(clusters[i])
@@ -234,37 +317,74 @@ def semantically_merge(clusters, client, USE_EMBEDDINGS, EMBED_MODEL, SIM_THRESH
         used.add(i)
         for j in range(i+1, len(clusters)):
             if j in used or not base_centroid or not centroids[j]: continue
-            if cosine(base_centroid, centroids[j]) >= SIM_THRESHOLD:
+            sim = cosine(base_centroid, centroids[j])
+            if sim >= SIM_THRESHOLD:
+                merge_ops.append((i, j, round(sim, 4)))
                 base_items.extend(clusters[j])
                 used.add(j)
                 base_centroid = cluster_centroid([base_centroid, centroids[j]])
         merged.append(base_items)
+
+    if merge_ops:
+        log(f"semantically_merge: merged pairs {merge_ops}")
+    else:
+        log("semantically_merge: no merges performed")
+
+    log(f"semantically_merge: end -> {len(merged)} clusters")
     return merged
 
-# The write_llms_txt function now returns the content as a string
 def write_llms_txt(clusters, results, client):
+    log(f"write_llms_txt: rendering {sum(len(c) for c in clusters)} items across {len(clusters)} clusters")
     lines = []
-    lines.append("# llms.txt")
     domain, site_description = generate_site_description(results, client)
-    lines.append(f"# {domain}")
-    lines.append("")
-    lines.append(f"> {site_description}")
-    lines.append("")
-    for cluster_items in clusters:
+
+    # First line = "# Domain" (capitalized first letter)
+    domain_line = f"# {domain.strip().capitalize()}"
+    lines.append(domain_line)
+    log(f"write_llms_txt: header -> {domain_line}")
+
+    # Optional site description as a quote (keep if present)
+    if site_description and str(site_description).strip():
+        lines.append("")
+        lines.append(f"> {site_description.strip()}")
+        lines.append("")
+        log("write_llms_txt: added site description")
+
+    # Clusters
+    for idx, cluster_items in enumerate(clusters, start=1):
         label = cluster_label_from_items(cluster_items, client, fallback="Content")
         lines.append(f"## Cluster: {label}")
+        log(f"write_llms_txt: cluster {idx} label='{label}' size={len(cluster_items)}")
+
         for it in cluster_items:
-            lines.append(f"- URL: {it.get('url','')}")
-            lines.append(f"  Title: {normalize_space(it.get('title',''))}")
-            lines.append(f"  Description: {normalize_space(it.get('description',''))}")
+            url = (it.get("url", "") or "").strip()
+            title = normalize_space(it.get("title", "") or "").strip()
+            desc = normalize_space(it.get("description", "") or "").strip()
+
+            if not title:
+                title = url
+
+            bullet = f"- [{title}]({url})"
+            if desc:
+                bullet += f": {desc}"
+            lines.append(bullet)
+
         lines.append("")
-    
-    # Return the content as a string instead of writing to a file
-    return "\n".join(lines)
+
+    output = "\n".join(lines)
+    log(f"write_llms_txt: done (length={len(output)} chars)")
+    return output
 
 def build_llms_txt_from_results(results, client, USE_EMBEDDINGS, EMBED_MODEL, SIM_THRESHOLD):
+    log(f"build_llms_txt_from_results: start | results={len(results)} | use_embeddings={USE_EMBEDDINGS} | model={EMBED_MODEL} | thr={SIM_THRESHOLD}")
     clusters = seed_clusters(results)
-    if USE_EMBEDDINGS and sum(len(c) for c in clusters) > 1:
+    total_items = sum(len(c) for c in clusters)
+    log(f"build_llms_txt_from_results: seeded {len(clusters)} clusters with {total_items} items total")
+    if USE_EMBEDDINGS and total_items > 1:
         clusters = semantically_merge(clusters, client, USE_EMBEDDINGS, EMBED_MODEL, SIM_THRESHOLD)
-    for c in clusters: c.sort(key=lambda it: it.get("url",""))
-    return write_llms_txt(clusters, results, client=client)
+    for c in clusters:
+        c.sort(key=lambda it: it.get("url", ""))
+    log("build_llms_txt_from_results: clusters sorted by URL")
+    final_txt = write_llms_txt(clusters, results, client=client)
+    log("build_llms_txt_from_results: completed llms.txt build")
+    return final_txt
