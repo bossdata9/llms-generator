@@ -128,9 +128,9 @@ EXCLUDE_SEGMENTS = ["index", "home", "homepage", "privacy", "terms", "legal", "s
 st.image("bossdata.svg", width=200)
 st.title("Llms.txt Generator")
 st.write(
-    "input your website main domain. Like https://bossdata.be"
+    "input your page sitemap xml. Like https://bossdata.be/page-sitemap.xml"
 )
-base_url = st.text_input("Website domain:", placeholder = "https://bossdata.be")
+sitemap_location = st.text_input("Website domain:", placeholder = "https://bossdata.be/page-sitemap.xml")
 size = st.text_input("Amount of urls (leave blank for max - 100):", placeholder = 100)
 
 
@@ -143,8 +143,7 @@ if st.button("Generate"):
     st.write("Phase 1: fetching " + str(size) + " urls (according to size)")
 
     # Fase 1: bestand uitlezen en omzetten in lijst
-    sitemap_url = base_url + "/page-sitemap.xml"
-    urls = generator.extract_urls_from_sitemap(sitemap_url) # urls is defined here
+    urls = generator.extract_urls_from_sitemap(sitemap_location) # urls is defined here
     st.write(urls)
     selected_urls = urls[:int(size)] # selected_urls is defined here
 
