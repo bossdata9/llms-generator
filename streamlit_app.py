@@ -128,7 +128,7 @@ EXCLUDE_SEGMENTS = ["index", "home", "homepage", "privacy", "terms", "legal", "s
 st.image("bossdata.svg", width=200)
 st.title("Llms.txt Generator")
 st.write(
-    "input your page sitemap xml. Like https://bossdata.be/page-sitemap.xml. Only include pages that you want. For example, don't use specific detailed product pages, but product category pages instead. Just removed the lines in the sitemamp and save. Then upload your new version into this app."
+    "Input your page sitemap xml. Like https://bossdata.be/page-sitemap.xml. Only include pages that you want. For example, don't use specific detailed product pages, but product category pages instead. Just removed the lines in the sitemap that you don't want to include and save. Then upload your new version into this app."
 )
 
 uploaded_file = st.file_uploader("Upload sitemap XML file", type=["xml"])
