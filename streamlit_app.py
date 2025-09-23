@@ -124,85 +124,84 @@ EXCLUDE_SEGMENTS = ["index", "home", "homepage", "privacy", "terms", "legal", "s
         "user-data", "settings", "internal-docs", "pricing", "sales-materials", "confidential", "beta", "staging", "dev", "404",
         "search", "thank-you", "cart", "tag", "category", "archive"]
 
-### THE ACTUAL APP ###
+# === UI HEADER ===
 st.image("bossdata.svg", width=200)
 st.title("Llms.txt Generator")
 st.write(
-    "Input your page sitemap xml. Like https://bossdata.be/page-sitemap.xml. Only include pages that you want. For example, don't use specific detailed product pages, but product category pages instead. Just removed the lines in the sitemap that you don't want to include and save. Then upload your new version into this app."
+    "Input your page sitemap xml. Like https://bossdata.be/page-sitemap.xml. Only include pages that you want. "
+    "For example, don't use specific detailed product pages, but product category pages instead. "
+    "Just remove the lines in the sitemap that you don't want to include and save. Then upload your new version into this app."
 )
 
+# ✅ New: toggle to enable/disable relevance filtering (Phase 2)
+run_filtering = st.checkbox("Run relevance filtering (Phase 2)", value=False, help="If unchecked, all fetched URLs are kept.")
+
 uploaded_file = st.file_uploader("Upload sitemap XML file", type=["xml"])
+sitemap_location = uploaded_file if uploaded_file is not None else None
 
-if uploaded_file is not None:
-    sitemap_location = uploaded_file  # pass this to your generator function
-else:
-    sitemap_location = None
-
-
-size = st.text_input("Amount of urls (leave blank for max - 10000):", placeholder = 10000)
-
+size_input = st.text_input("Amount of urls (leave blank for max - 10000):", placeholder="10000")
 
 if st.button("Generate") and sitemap_location is not None:
-    size = 10000 if size.strip() == "" else min(int(size), 10000)
+    # Parse size safely
+    try:
+        size = 10000 if size_input.strip() == "" else min(int(size_input), 10000)
+    except Exception:
+        st.warning("Invalid size. Using default 10000.")
+        size = 10000
 
     output_container = st.empty()
 
     st.write("llms.txt generation started!")
-    st.write("Phase 1: fetching " + str(size) + " urls (according to size)")
+    st.write(f"Phase 1: fetching up to {size} urls (according to size)")
 
-    # Fase 1: bestand uitlezen en omzetten in lijst
-    urls = generator.extract_urls_from_sitemap(sitemap_location) # urls is defined here
+    # Phase 1: read file and extract list
+    urls = generator.extract_urls_from_sitemap(sitemap_location)
     st.write(urls)
-    selected_urls = urls[:int(size)] # selected_urls is defined here
+    selected_urls = urls[:int(size)]
 
-    # Fase 2: Enkel relevante URLS selecteren
-    st.write("Phase 2: Filtering relevant URLS to include")
+    # Phase 2: (optional) relevance filtering
     relevant_urls = []
-    #output_container.write(f"ℹ️ Starting URL filtering process for {len(selected_urls)} URLs...")
-    
+    if run_filtering:
+        st.write("Phase 2: Filtering relevant URLs to include")
+        for i, u in enumerate(selected_urls, start=1):
+            output_container.write(f"[{i}/{len(selected_urls)}] Processing: {u}")
+            if generator.is_relevant_page(u, client, EXCLUDE_SEGMENTS):
+                relevant_urls.append(u)
+            else:
+                continue
+        st.write(f"✅ Filtering complete! Kept {len(relevant_urls)} of {len(selected_urls)} URLs.")
+    else:
+        st.write("Phase 2: Skipped (checkbox off) — keeping all fetched URLs.")
+        relevant_urls = selected_urls
 
-    for i, u in enumerate(selected_urls, start=1): # This loop now runs *after* selected_urls is defined.
-        output_container.write(f"[{i}/{len(selected_urls)}] Processing: {u}")
-        #if any(seg in u.lower() for seg in EXCLUDE_SEGMENTS):
-            #output_container.write(f"🗑️ Dropped by pre-filter: {u}")
-            #continue
-        if generator.is_relevant_page(u, client, EXCLUDE_SEGMENTS):
-            print("testing url: " + u)
-            #output_container.write(f"✅ Kept: {u}")
-            relevant_urls.append(u)
-        else:
-            continue
-           #output_container.write(f"❌ Dropped by relevance check: {u}")
-
-    #output_container.write(f"✅ Filtering complete! Found {len(relevant_urls)} relevant URLs.")
-
-    # # Fase 3: Relevante URLS samenvatten
-    st.write("Phase 3: Generating title & description for " + str(len(relevant_urls)) + " urls")
+    # Phase 3: summarize relevant pages
+    st.write(f"Phase 3: Generating title & description for {len(relevant_urls)} urls")
     results = []
     for i, u in enumerate(relevant_urls, start=1):
         output_container.write(f"[{i}/{len(relevant_urls)}] {u}")
         page_text = generator.fetch_text(u)
         item = generator.describe_page(u, page_text, client)
         results.append(item)
-        ##time.sleep(0.5 + random.random()*0.5)
 
-    #output_container.write("\n✅ Finished. Results:")
-    #output_container.write(json.dumps(results, indent=2))
-
-    # # Fase 4: clusteren en opmaken LLMS.TXT
+    # Phase 4: clustering & llms.txt creation
     st.write("Phase 4: Clustering & creating final file")
     USE_EMBEDDINGS = True
     EMBED_MODEL = "text-embedding-3-large"
     SIM_THRESHOLD = 0.92
-    llms_output = generator.build_llms_txt_from_results(results, client, USE_EMBEDDINGS, EMBED_MODEL, SIM_THRESHOLD)
-    
+    llms_output = generator.build_llms_txt_from_results(
+        results, client, USE_EMBEDDINGS, EMBED_MODEL, SIM_THRESHOLD
+    )
+
     st.write("Final llms.txt is Ready. Download here:")
     st.download_button(
-    label="Download",
-    data=llms_output,
-    file_name="llms.txt",
-    mime="text/plain"
-)
+        label="Download",
+        data=llms_output,
+        file_name="llms.txt",
+        mime="text/plain"
+    )
+
+elif st.button("Generate") and sitemap_location is None:
+    st.warning("Please upload a sitemap XML first.")
 
 
 
