@@ -1,12 +1,8 @@
 import streamlit as st
-from PIL import Image
-import time
 import llms_generator as generator
-import os
-from openai import OpenAI
-import json
-import random
-import openai   # <-- this is the missing piece
+from openai import OpenAI  
+import asyncio
+
 
 
 st.markdown(
@@ -135,9 +131,6 @@ st.write(
     "Just remove the lines in the sitemap that you don't want to include and save. Then upload your new version into this app."
 )
 
-# ✅ New: toggle to enable/disable relevance filtering (Phase 2)
-run_filtering = st.checkbox("Run relevance filtering (Phase 2)", value=False, help="If unchecked, all fetched URLs are kept.")
-
 uploaded_file = st.file_uploader("Upload sitemap XML file", type=["xml"])
 sitemap_location = uploaded_file if uploaded_file is not None else None
 
@@ -157,48 +150,63 @@ if generate_clicked:
             st.warning("Invalid size. Using default 10000.")
             size = 10000
 
-        output_container = st.empty()
-
         st.write("llms.txt generation started!")
         st.write(f"Phase 1: fetching up to {size} urls (according to size)")
 
         # Phase 1: read file and extract list
         urls = generator.extract_urls_from_sitemap(sitemap_location)
-        st.write(urls)
+        ##st.write(urls)
         selected_urls = urls[:int(size)]
 
-        # Phase 2: (optional) relevance filtering
-        relevant_urls = []
-        if run_filtering:
-            st.write("Phase 2: Filtering relevant URLs to include")
-            for i, u in enumerate(selected_urls, start=1):
-                output_container.write(f"[{i}/{len(selected_urls)}] Processing: {u}")
-                if generator.is_relevant_page(u, client, EXCLUDE_SEGMENTS):
-                    relevant_urls.append(u)
-                else:
-                    continue
-            st.write(f"✅ Filtering complete! Kept {len(relevant_urls)} of {len(selected_urls)} URLs.")
-        else:
-            st.write("Phase 2: Skipped (checkbox off) — keeping all fetched URLs.")
-            relevant_urls = selected_urls
+        
+        st.write(f"Phase 2: Generating title & description for {len(selected_urls)} urls")
 
-        # Phase 3: summarize relevant pages
-        st.write(f"Phase 3: Generating title & description for {len(relevant_urls)} urls")
+        total = len(selected_urls)
+        batch_size = 20  # tweak to your liking
+        progress = st.progress(0)
+        status = st.empty()
+
         results = []
-        for i, u in enumerate(relevant_urls, start=1):
-            output_container.write(f"[{i}/{len(relevant_urls)}] {u}")
-            page_text = generator.fetch_text(u)
-            item = generator.describe_page(u, page_text, client)
-            results.append(item)
+        for i in range(0, total, batch_size):
+            batch = selected_urls[i:i+batch_size]
+            # Run the async summarizer for this batch
+            batch_results = asyncio.run(
+                generator.summarize_urls_async(
+                    batch,
+                    openai_api_key=st.secrets["openai_api_key"],
+                    max_concurrency=8,              # keep your concurrency
+                    model="gpt-4.1-mini",
+                )
+            )
+            results.extend(batch_results)
+
+            done = min(i + batch_size, total)
+            progress.progress(done / total)
+            status.write(f"Phase 3: {done}/{total} pages summarized")
+
 
         # Phase 4: clustering & llms.txt creation
-        st.write("Phase 4: Clustering & creating final file")
+        st.write("Phase 3: Clustering & creating final file")
+        # existing vars
         USE_EMBEDDINGS = True
         EMBED_MODEL = "text-embedding-3-large"
-        SIM_THRESHOLD = 0.92
-        llms_output = generator.build_llms_txt_from_results(
-            results, client, USE_EMBEDDINGS, EMBED_MODEL, SIM_THRESHOLD
-        )
+        SIM_THRESHOLD = 0.86
+
+        # new: async client for embeddings/merge
+        client_async = generator.AsyncOpenAI(api_key=st.secrets["openai_api_key"])
+
+        # optional: small spinner while clustering/embedding
+        with st.spinner("Phase 4: Clustering & creating final file…"):
+            llms_output = asyncio.run(
+                generator.build_llms_txt_from_results_async(
+                    results=results,           # from your Phase 3
+                    client_sync=client,        # your existing OpenAI() client
+                    client_async=client_async, # async client for embeddings
+                    USE_EMBEDDINGS=USE_EMBEDDINGS,
+                    EMBED_MODEL=EMBED_MODEL,
+                    SIM_THRESHOLD=SIM_THRESHOLD,
+                )
+            )
 
         st.write("Final llms.txt is Ready. Download here:")
         st.download_button(
