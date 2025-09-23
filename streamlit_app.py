@@ -159,7 +159,7 @@ if st.button("Generate") and sitemap_location is not None:
     st.write("Phase 2: Filtering relevant URLS to include")
     relevant_urls = []
     #output_container.write(f"ℹ️ Starting URL filtering process for {len(selected_urls)} URLs...")
-    time.sleep(2)
+    
 
     for i, u in enumerate(selected_urls, start=1): # This loop now runs *after* selected_urls is defined.
         output_container.write(f"[{i}/{len(selected_urls)}] Processing: {u}")
@@ -184,7 +184,7 @@ if st.button("Generate") and sitemap_location is not None:
         page_text = generator.fetch_text(u)
         item = generator.describe_page(u, page_text, client)
         results.append(item)
-        time.sleep(0.5 + random.random()*0.5)
+        ##time.sleep(0.5 + random.random()*0.5)
 
     #output_container.write("\n✅ Finished. Results:")
     #output_container.write(json.dumps(results, indent=2))
