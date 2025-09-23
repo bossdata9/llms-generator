@@ -124,6 +124,8 @@ EXCLUDE_SEGMENTS = ["index", "home", "homepage", "privacy", "terms", "legal", "s
         "user-data", "settings", "internal-docs", "pricing", "sales-materials", "confidential", "beta", "staging", "dev", "404",
         "search", "thank-you", "cart", "tag", "category", "archive"]
 
+import streamlit as st
+
 # === UI HEADER ===
 st.image("bossdata.svg", width=200)
 st.title("Llms.txt Generator")
@@ -141,67 +143,71 @@ sitemap_location = uploaded_file if uploaded_file is not None else None
 
 size_input = st.text_input("Amount of urls (leave blank for max - 10000):", placeholder="10000")
 
-if st.button("Generate") and sitemap_location is not None:
-    # Parse size safely
-    try:
-        size = 10000 if size_input.strip() == "" else min(int(size_input), 10000)
-    except Exception:
-        st.warning("Invalid size. Using default 10000.")
-        size = 10000
+# ✅ Use only one button
+generate_clicked = st.button("Generate", key="generate_btn")
 
-    output_container = st.empty()
-
-    st.write("llms.txt generation started!")
-    st.write(f"Phase 1: fetching up to {size} urls (according to size)")
-
-    # Phase 1: read file and extract list
-    urls = generator.extract_urls_from_sitemap(sitemap_location)
-    st.write(urls)
-    selected_urls = urls[:int(size)]
-
-    # Phase 2: (optional) relevance filtering
-    relevant_urls = []
-    if run_filtering:
-        st.write("Phase 2: Filtering relevant URLs to include")
-        for i, u in enumerate(selected_urls, start=1):
-            output_container.write(f"[{i}/{len(selected_urls)}] Processing: {u}")
-            if generator.is_relevant_page(u, client, EXCLUDE_SEGMENTS):
-                relevant_urls.append(u)
-            else:
-                continue
-        st.write(f"✅ Filtering complete! Kept {len(relevant_urls)} of {len(selected_urls)} URLs.")
+if generate_clicked:
+    if sitemap_location is None:
+        st.warning("Please upload a sitemap XML first.")
     else:
-        st.write("Phase 2: Skipped (checkbox off) — keeping all fetched URLs.")
-        relevant_urls = selected_urls
+        # Parse size safely
+        try:
+            size = 10000 if size_input.strip() == "" else min(int(size_input), 10000)
+        except Exception:
+            st.warning("Invalid size. Using default 10000.")
+            size = 10000
 
-    # Phase 3: summarize relevant pages
-    st.write(f"Phase 3: Generating title & description for {len(relevant_urls)} urls")
-    results = []
-    for i, u in enumerate(relevant_urls, start=1):
-        output_container.write(f"[{i}/{len(relevant_urls)}] {u}")
-        page_text = generator.fetch_text(u)
-        item = generator.describe_page(u, page_text, client)
-        results.append(item)
+        output_container = st.empty()
 
-    # Phase 4: clustering & llms.txt creation
-    st.write("Phase 4: Clustering & creating final file")
-    USE_EMBEDDINGS = True
-    EMBED_MODEL = "text-embedding-3-large"
-    SIM_THRESHOLD = 0.92
-    llms_output = generator.build_llms_txt_from_results(
-        results, client, USE_EMBEDDINGS, EMBED_MODEL, SIM_THRESHOLD
-    )
+        st.write("llms.txt generation started!")
+        st.write(f"Phase 1: fetching up to {size} urls (according to size)")
 
-    st.write("Final llms.txt is Ready. Download here:")
-    st.download_button(
-        label="Download",
-        data=llms_output,
-        file_name="llms.txt",
-        mime="text/plain"
-    )
+        # Phase 1: read file and extract list
+        urls = generator.extract_urls_from_sitemap(sitemap_location)
+        st.write(urls)
+        selected_urls = urls[:int(size)]
 
-elif st.button("Generate") and sitemap_location is None:
-    st.warning("Please upload a sitemap XML first.")
+        # Phase 2: (optional) relevance filtering
+        relevant_urls = []
+        if run_filtering:
+            st.write("Phase 2: Filtering relevant URLs to include")
+            for i, u in enumerate(selected_urls, start=1):
+                output_container.write(f"[{i}/{len(selected_urls)}] Processing: {u}")
+                if generator.is_relevant_page(u, client, EXCLUDE_SEGMENTS):
+                    relevant_urls.append(u)
+                else:
+                    continue
+            st.write(f"✅ Filtering complete! Kept {len(relevant_urls)} of {len(selected_urls)} URLs.")
+        else:
+            st.write("Phase 2: Skipped (checkbox off) — keeping all fetched URLs.")
+            relevant_urls = selected_urls
+
+        # Phase 3: summarize relevant pages
+        st.write(f"Phase 3: Generating title & description for {len(relevant_urls)} urls")
+        results = []
+        for i, u in enumerate(relevant_urls, start=1):
+            output_container.write(f"[{i}/{len(relevant_urls)}] {u}")
+            page_text = generator.fetch_text(u)
+            item = generator.describe_page(u, page_text, client)
+            results.append(item)
+
+        # Phase 4: clustering & llms.txt creation
+        st.write("Phase 4: Clustering & creating final file")
+        USE_EMBEDDINGS = True
+        EMBED_MODEL = "text-embedding-3-large"
+        SIM_THRESHOLD = 0.92
+        llms_output = generator.build_llms_txt_from_results(
+            results, client, USE_EMBEDDINGS, EMBED_MODEL, SIM_THRESHOLD
+        )
+
+        st.write("Final llms.txt is Ready. Download here:")
+        st.download_button(
+            label="Download",
+            data=llms_output,
+            file_name="llms.txt",
+            mime="text/plain"
+        )
+
 
 
 
