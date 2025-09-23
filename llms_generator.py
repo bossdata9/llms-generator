@@ -9,7 +9,7 @@ import json
 from openai import OpenAI          # sync client used for site description
 from openai import AsyncOpenAI     # async client used for summaries, embeddings, labels
 import re
-from urllib.parse import urlparse
+from urllib.parse import urlparse, unquote
 from collections import defaultdict
 import math
 from datetime import datetime
@@ -214,7 +214,14 @@ def norm(a): return math.sqrt(dot(a, a)) or 1e-12
 def cosine(a, b): return dot(a, b) / (norm(a) * norm(b))
 
 def represent_item(item):
-    return normalize_space(f'{item.get("title","")} — {item.get("description","")}')
+    title = normalize_space(item.get("title", ""))
+    desc  = normalize_space(item.get("description", ""))
+    url   = item.get("url", "") or ""
+    cat   = _url_tokens_for_similarity(url, take_first=2)
+
+    # Weight the coarse category a bit by repeating it once
+    weighted = f"{cat} {cat} — {title} — {desc}"
+    return normalize_space(weighted)
 
 def cluster_centroid(vecs):
     if not vecs: return []
@@ -289,6 +296,70 @@ async def semantically_merge_async(clusters, client_async: AsyncOpenAI, EMBED_MO
 
     log(f"semantically_merge_async: end -> {len(merged)} clusters")
     return merged
+
+
+async def aggregate_small_clusters_async(
+    clusters,
+    client_async: AsyncOpenAI,
+    EMBED_MODEL: str,
+    min_size: int = 2,
+    assign_threshold: float = 0.82,
+):
+    """
+    Move clusters smaller than `min_size` into the most similar other cluster
+    if centroid similarity >= assign_threshold.
+    """
+    if not clusters:
+        return clusters
+
+    # Build item vectors & cluster centroids
+    texts, idx_map = [], []
+    for ci, items in enumerate(clusters):
+        for it in items:
+            texts.append(represent_item(it))
+            idx_map.append(ci)
+
+    vecs = await embed_texts_async(texts, client_async, EMBED_MODEL)
+
+    # collect per-cluster vectors & centroids
+    per_cluster_vecs = defaultdict(list)
+    for v, ci in zip(vecs, idx_map):
+        per_cluster_vecs[ci].append(v)
+    centroids = [cluster_centroid(per_cluster_vecs[i]) if per_cluster_vecs[i] else [] for i in range(len(clusters))]
+
+    keep = set(range(len(clusters)))
+    moves = []
+
+    for i, items in enumerate(clusters):
+        if len(items) >= min_size or not centroids[i]:
+            continue
+        # find best target j
+        best_j, best_sim = -1, -1.0
+        for j in range(len(clusters)):
+            if j == i or not centroids[j]:
+                continue
+            sim = cosine(centroids[i], centroids[j])
+            if sim > best_sim:
+                best_sim, best_j = sim, j
+        if best_j >= 0 and best_sim >= assign_threshold:
+            moves.append((i, best_j, round(best_sim, 4)))
+
+    # perform moves
+    for i, j, sim in moves:
+        clusters[j].extend(clusters[i])
+        keep.discard(i)
+
+    new_clusters = [clusters[k] for k in sorted(keep)]
+    if moves:
+        log(f"aggregate_small_clusters_async: moved {len(moves)} small clusters -> {[(i,j,s) for i,j,s in moves]}")
+    else:
+        log("aggregate_small_clusters_async: no small clusters moved")
+    return new_clusters
+
+
+
+
+
 
 # ======================================================================
 # Async labeling + rendering
@@ -400,13 +471,16 @@ def write_llms_txt_with_labels(clusters, results, client: OpenAI, labels: list[s
 
 async def build_llms_txt_from_results_async(
     results,
-    client_sync: OpenAI,               # sync client for site description
-    client_async: AsyncOpenAI,         # async client for embeddings + labels
+    client_sync: OpenAI,
+    client_async: AsyncOpenAI,
     USE_EMBEDDINGS: bool,
     EMBED_MODEL: str,
     SIM_THRESHOLD: float,
     label_model: str = "gpt-4.1-mini",
     label_max_concurrency: int = 8,
+    # NEW: knobs for aggregation
+    min_cluster_size: int = 2,
+    assign_threshold: float = 0.82,
 ):
     log(f"build_llms_txt_from_results_async: start | results={len(results)} | use_embeddings={USE_EMBEDDINGS} | model={EMBED_MODEL} | thr={SIM_THRESHOLD}")
     clusters = seed_clusters(results)
@@ -416,10 +490,18 @@ async def build_llms_txt_from_results_async(
     if USE_EMBEDDINGS and total_items > 1:
         clusters = await semantically_merge_async(clusters, client_async, EMBED_MODEL, SIM_THRESHOLD)
 
+        # NEW: aggregate tiny clusters into nearest neighbor
+        clusters = await aggregate_small_clusters_async(
+            clusters,
+            client_async,
+            EMBED_MODEL,
+            min_size=min_cluster_size,
+            assign_threshold=assign_threshold,
+        )
+
     for c in clusters:
         c.sort(key=lambda it: it.get("url", ""))
 
-    # Label clusters concurrently
     labels = await label_clusters_async(
         clusters,
         client_async=client_async,
@@ -431,3 +513,13 @@ async def build_llms_txt_from_results_async(
     final_txt = write_llms_txt_with_labels(clusters, results, client=client_sync, labels=labels)
     log("build_llms_txt_from_results_async: completed llms.txt build")
     return final_txt
+
+
+
+def _url_tokens_for_similarity(url: str, take_first: int = 2) -> str:
+    """Return normalized tokens from the first N path segments to emphasize coarse category."""
+    p = urlparse(url or "")
+    segs = [unquote(s) for s in p.path.split("/") if s]
+    head = segs[:take_first]
+    head = [re.sub(r"[-_]+", " ", s).strip() for s in head]
+    return normalize_space(" ".join(head))
