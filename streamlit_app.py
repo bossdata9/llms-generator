@@ -210,7 +210,7 @@ if generate_clicked:
 
             USE_EMBEDDINGS = True
             EMBED_MODEL = "text-embedding-3-large"
-            SIM_THRESHOLD = 0.86  # more merges; tweak if needed
+            SIM_THRESHOLD = 0.5  # more merges; tweak if needed
 
             async def _run_phase3_build():
                 # Create/close async client *inside* the loop to avoid cleanup warnings
